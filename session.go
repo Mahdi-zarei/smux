@@ -17,6 +17,7 @@ const (
 	defaultAcceptBacklog = 1024
 	maxShaperSize        = 1024
 	openCloseTimeout     = 30 * time.Second // stream open/close timeout
+	deleteThreshold      = 1 << 15
 )
 
 // define frame class
@@ -58,8 +59,9 @@ type Session struct {
 	bucket       int32         // token bucket
 	bucketNotify chan struct{} // used for waiting for tokens
 
-	streams    map[uint32]*Stream // all streams in this session
-	streamLock sync.Mutex         // locks streams
+	streams     map[uint32]*Stream // all streams in this session
+	streamLock  sync.Mutex         // locks streams
+	deleteCount int32
 
 	die     chan struct{} // flag session has died
 	dieOnce sync.Once
@@ -314,7 +316,20 @@ func (s *Session) streamClosed(sid uint32) {
 		}
 	}
 	delete(s.streams, sid)
+	s.onDelete()
 	s.streamLock.Unlock()
+}
+
+func (s *Session) onDelete() {
+	s.deleteCount++
+	if s.deleteCount >= deleteThreshold {
+		nMap := make(map[uint32]*Stream)
+		for key, val := range s.streams {
+			nMap[key] = val
+		}
+		s.streams = nMap
+		s.deleteCount = 0
+	}
 }
 
 // returnTokens is called by stream to return token after read
